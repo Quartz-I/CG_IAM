@@ -4,27 +4,30 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 import math
 
-# Initialize Pygame (use display.init() to avoid lag)
+# Initialize Pygame
 pygame.display.init()
 pygame.font.init()
-screen = pygame.display.set_mode((1280, 720), DOUBLEBUF | OPENGL)
-pygame.display.set_caption("Minecraft PvP Split Screen")
+screen = pygame.display.set_mode((1920, 1080), DOUBLEBUF | OPENGL)
+pygame.display.set_caption("Minecraft PvP Split Screen - 1080p")
 clock = pygame.time.Clock()
 pygame.mouse.set_visible(False)
 pygame.event.set_grab(True)
+
+# Font for score numbers
+score_font = pygame.font.Font(None, 120)
 
 # Map dimensions
 MAP_SIZE = 60
 SPAWN_DISTANCE = 25
 
-# Player 1 variables (spawns at one end)
+# Player 1 variables
 player1_pos = [-SPAWN_DISTANCE, 0, 0]
 player1_rotation = 0
 player1_health = 100
 player1_score = 0
 player1_alive = True
 
-# Player 2 variables (spawns at opposite end)
+# Player 2 variables
 player2_pos = [SPAWN_DISTANCE, 0, 0]
 player2_rotation = 180
 player2_health = 100
@@ -41,10 +44,13 @@ move_speed = 0.1
 # Bullets
 bullets = []
 
+# Obstacles list
+obstacles = []
+
 # Animation
 walk_animation = 0
 
-# Display list IDs for optimization (prevents lag)
+# Display lists
 ground_display_list = None
 cube_display_list = None
 
@@ -66,15 +72,67 @@ class Bullet:
         return self.lifetime > 0
     
     def check_hit_player(self, player_pos, player_size=1.0):
-        """Check if bullet hits a player"""
         dx = self.pos[0] - player_pos[0]
         dy = self.pos[1] - player_pos[1] - 1
         dz = self.pos[2] - player_pos[2]
         distance = math.sqrt(dx*dx + dy*dy + dz*dz)
         return distance < (self.radius + player_size)
+    
+    def check_hit_obstacle(self, obstacle):
+        """Check if bullet hits an obstacle"""
+        dx = self.pos[0] - obstacle['x']
+        dy = self.pos[1] - obstacle['y']
+        dz = self.pos[2] - obstacle['z']
+        distance = math.sqrt(dx*dx + dy*dy + dz*dz)
+        return distance < (self.radius + obstacle['size'])
+
+class Obstacle:
+    def __init__(self, x, y, z, width, height, depth, color):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.width = width
+        self.height = height
+        self.depth = depth
+        self.color = color
+        self.size = max(width, height, depth) / 2
+    
+    def to_dict(self):
+        return {
+            'x': self.x,
+            'y': self.y,
+            'z': self.z,
+            'width': self.width,
+            'height': self.height,
+            'depth': self.depth,
+            'color': self.color,
+            'size': self.size
+        }
+
+def add_obstacle(x, y, z, width, height, depth, color):
+    """Add an obstacle to the map"""
+    obstacles.append(Obstacle(x, y, z, width, height, depth, color))
+
+def add_wall(x1, z1, x2, z2, height=3, thickness=1):
+    """Add a wall between two points"""
+    center_x = (x1 + x2) / 2
+    center_z = (z1 + z2) / 2
+    length = math.sqrt((x2-x1)**2 + (z2-z1)**2)
+    
+    if abs(x2 - x1) > abs(z2 - z1):
+        add_obstacle(center_x, height/2, center_z, length, height, thickness, (0.5, 0.3, 0.2))
+    else:
+        add_obstacle(center_x, height/2, center_z, thickness, height, length, (0.5, 0.3, 0.2))
+
+def add_box_obstacle(x, z, size=3):
+    """Add a box obstacle"""
+    add_obstacle(x, size/2, z, size, size, size, (0.6, 0.4, 0.2))
+
+def add_pillar(x, z, height=5, radius=1.5):
+    """Add a pillar"""
+    add_obstacle(x, height/2, z, radius*2, height, radius*2, (0.4, 0.4, 0.4))
 
 def setup_lighting():
-    """Setup OpenGL lighting"""
     glEnable(GL_LIGHTING)
     glEnable(GL_LIGHT0)
     glEnable(GL_COLOR_MATERIAL)
@@ -86,7 +144,6 @@ def setup_lighting():
     glLightfv(GL_LIGHT0, GL_SPECULAR, [1, 1, 1, 1])
 
 def create_cube_display_list():
-    """Pre-compile cube geometry to prevent lag"""
     global cube_display_list
     cube_display_list = glGenLists(1)
     glNewList(cube_display_list, GL_COMPILE)
@@ -116,7 +173,6 @@ def create_cube_display_list():
     glEndList()
 
 def draw_minecraft_cube(x, y, z, width, height, depth, color):
-    """Draw cube using display list (faster)"""
     glPushMatrix()
     glTranslatef(x, y, z)
     glScalef(width, height, depth)
@@ -125,7 +181,6 @@ def draw_minecraft_cube(x, y, z, width, height, depth, color):
     glPopMatrix()
 
 def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
-    """Draw Minecraft-style player"""
     if not is_alive:
         return
     
@@ -133,7 +188,6 @@ def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
     glTranslatef(pos[0], pos[1], pos[2])
     glRotatef(rotation, 0, 1, 0)
     
-    # Animation
     arm_swing = math.sin(walk_animation) * 30 if is_moving else 0
     leg_swing = math.sin(walk_animation) * 30 if is_moving else 0
     
@@ -186,7 +240,6 @@ def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
     glPopMatrix()
 
 def create_ground_display_list():
-    """Pre-compile ground to prevent lag"""
     global ground_display_list
     ground_display_list = glGenLists(1)
     glNewList(ground_display_list, GL_COMPILE)
@@ -201,7 +254,7 @@ def create_ground_display_list():
     glVertex3f(-MAP_SIZE, 0, MAP_SIZE)
     glEnd()
     
-    # Map borders (walls)
+    # Border walls
     wall_color = (0.5, 0.3, 0.2)
     wall_height = 5
     
@@ -257,16 +310,27 @@ def create_ground_display_list():
     glEndList()
 
 def draw_ground():
-    """Draw ground using display list"""
     glCallList(ground_display_list)
 
+def draw_obstacles():
+    """Draw all obstacles"""
+    for obs in obstacles:
+        draw_minecraft_cube(obs.x, obs.y, obs.z, obs.width, obs.height, obs.depth, obs.color)
+
 def draw_bullet(bullet):
-    """Draw bullet"""
     color = (1, 1, 0) if bullet.owner == 1 else (0, 1, 1)
     draw_minecraft_cube(bullet.pos[0], bullet.pos[1] + 1, bullet.pos[2], 0.2, 0.2, 0.2, color)
 
+def draw_text_2d(x, y, text, font, color=(255, 255, 255)):
+    """Draw text using pygame font - proper 2D overlay method"""
+    text_surface = font.render(str(text), True, color)
+    text_data = pygame.image.tostring(text_surface, "RGBA", True)
+    
+    glRasterPos2f(x, y)
+    glDrawPixels(text_surface.get_width(), text_surface.get_height(), 
+                 GL_RGBA, GL_UNSIGNED_BYTE, text_data)
+
 def set_camera(player_pos, player_rotation):
-    """Set camera behind player"""
     cam_x = player_pos[0] - math.sin(math.radians(player_rotation)) * camera_distance
     cam_y = player_pos[1] + camera_height
     cam_z = player_pos[2] - math.cos(math.radians(player_rotation)) * camera_distance
@@ -278,19 +342,16 @@ def set_camera(player_pos, player_rotation):
     )
 
 def draw_scene(player1_moving, player2_moving):
-    """Draw the entire game scene"""
     draw_ground()
-    
-    # Draw both players
+    draw_obstacles()
     draw_minecraft_player(player1_pos, player1_rotation, (0.3, 0.5, 0.9), player1_moving, player1_alive)
     draw_minecraft_player(player2_pos, player2_rotation, (0.9, 0.3, 0.3), player2_moving, player2_alive)
     
-    # Draw bullets
     for bullet in bullets:
         draw_bullet(bullet)
 
 def handle_player1_movement(keys, dt):
-    """Handle Player 1 movement"""
+    """Player 1: WASD (with A/D swapped), Q/E rotate, SPACE shoot"""
     global player1_pos, player1_rotation
     if not player1_alive:
         return False
@@ -298,36 +359,49 @@ def handle_player1_movement(keys, dt):
     speed = move_speed * dt
     is_moving = False
     
+    # Rotation with Q and E
     if keys[K_q]:
         player1_rotation += 2
     if keys[K_e]:
         player1_rotation -= 2
     
+    new_x, new_z = player1_pos[0], player1_pos[2]
+    
+    # Movement (A and D are SWAPPED)
     if keys[K_w]:
-        player1_pos[0] += math.sin(math.radians(player1_rotation)) * speed
-        player1_pos[2] += math.cos(math.radians(player1_rotation)) * speed
+        new_x += math.sin(math.radians(player1_rotation)) * speed
+        new_z += math.cos(math.radians(player1_rotation)) * speed
         is_moving = True
     if keys[K_s]:
-        player1_pos[0] -= math.sin(math.radians(player1_rotation)) * speed
-        player1_pos[2] -= math.cos(math.radians(player1_rotation)) * speed
+        new_x -= math.sin(math.radians(player1_rotation)) * speed
+        new_z -= math.cos(math.radians(player1_rotation)) * speed
         is_moving = True
-    if keys[K_d]:
-        player1_pos[0] += math.sin(math.radians(player1_rotation - 90)) * speed
-        player1_pos[2] += math.cos(math.radians(player1_rotation - 90)) * speed
+    if keys[K_d]:  # D now strafes LEFT
+        new_x += math.sin(math.radians(player1_rotation - 90)) * speed
+        new_z += math.cos(math.radians(player1_rotation - 90)) * speed
         is_moving = True
-    if keys[K_a]:
-        player1_pos[0] += math.sin(math.radians(player1_rotation + 90)) * speed
-        player1_pos[2] += math.cos(math.radians(player1_rotation + 90)) * speed
+    if keys[K_a]:  # A now strafes RIGHT
+        new_x += math.sin(math.radians(player1_rotation + 90)) * speed
+        new_z += math.cos(math.radians(player1_rotation + 90)) * speed
         is_moving = True
     
-    # Keep player in bounds
-    player1_pos[0] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, player1_pos[0]))
-    player1_pos[2] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, player1_pos[2]))
+    # Check collision with obstacles
+    collision = False
+    for obs in obstacles:
+        dx = new_x - obs.x
+        dz = new_z - obs.z
+        if (abs(dx) < obs.width / 2 + 0.5 and abs(dz) < obs.depth / 2 + 0.5):
+            collision = True
+            break
+    
+    if not collision:
+        player1_pos[0] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, new_x))
+        player1_pos[2] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, new_z))
     
     return is_moving
 
 def handle_player2_movement(keys, dt):
-    """Handle Player 2 movement"""
+    """Player 2: IJKL movement, U/O rotate, SEMICOLON shoot"""
     global player2_pos, player2_rotation
     if not player2_alive:
         return False
@@ -335,47 +409,60 @@ def handle_player2_movement(keys, dt):
     speed = move_speed * dt
     is_moving = False
     
+    # Rotation with U and O
     if keys[K_u]:
         player2_rotation += 2
     if keys[K_o]:
         player2_rotation -= 2
     
-# Movement
-    if keys[K_i]:
-        player2_pos[0] += math.sin(math.radians(player2_rotation)) * speed
-        player2_pos[2] += math.cos(math.radians(player2_rotation)) * speed
-    if keys[K_k]:
-        player2_pos[0] -= math.sin(math.radians(player2_rotation)) * speed
-        player2_pos[2] -= math.cos(math.radians(player2_rotation)) * speed
-    if keys[K_l]:
-        player2_pos[0] += math.sin(math.radians(player2_rotation - 90)) * speed
-        player2_pos[2] += math.cos(math.radians(player2_rotation - 90)) * speed
-    if keys[K_j]:
-        player2_pos[0] += math.sin(math.radians(player2_rotation + 90)) * speed
-        player2_pos[2] += math.cos(math.radians(player2_rotation + 90)) * speed
+    new_x, new_z = player2_pos[0], player2_pos[2]
+    
+    # Movement with IJKL
+    if keys[K_i]:  # Forward
+        new_x += math.sin(math.radians(player2_rotation)) * speed
+        new_z += math.cos(math.radians(player2_rotation)) * speed
+        is_moving = True
+    if keys[K_k]:  # Backward
+        new_x -= math.sin(math.radians(player2_rotation)) * speed
+        new_z -= math.cos(math.radians(player2_rotation)) * speed
+        is_moving = True
+    if keys[K_j]:  # Strafe left
+        new_x += math.sin(math.radians(player2_rotation - 90)) * speed
+        new_z += math.cos(math.radians(player2_rotation - 90)) * speed
+        is_moving = True
+    if keys[K_l]:  # Strafe right
+        new_x += math.sin(math.radians(player2_rotation + 90)) * speed
+        new_z += math.cos(math.radians(player2_rotation + 90)) * speed
         is_moving = True
     
-    # Keep player in bounds
-    player2_pos[0] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, player2_pos[0]))
-    player2_pos[2] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, player2_pos[2]))
+    # Check collision with obstacles
+    collision = False
+    for obs in obstacles:
+        dx = new_x - obs.x
+        dz = new_z - obs.z
+        if (abs(dx) < obs.width / 2 + 0.5 and abs(dz) < obs.depth / 2 + 0.5):
+            collision = True
+            break
+    
+    if not collision:
+        player2_pos[0] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, new_x))
+        player2_pos[2] = max(-MAP_SIZE + 1, min(MAP_SIZE - 1, new_z))
     
     return is_moving
 
 def shoot_player1():
-    """Player 1 shoots"""
     if player1_alive:
         bullet = Bullet([player1_pos[0], player1_pos[1] + 1, player1_pos[2]], player1_rotation, 1)
         bullets.append(bullet)
 
 def shoot_player2():
-    """Player 2 shoots"""
     if player2_alive:
         bullet = Bullet([player2_pos[0], player2_pos[1] + 1, player2_pos[2]], player2_rotation, 2)
         bullets.append(bullet)
 
 def respawn_player(player_num):
-    """Respawn player at their spawn point"""
-    global player1_pos, player1_health, player1_alive, player2_pos, player2_health, player2_alive
+    global player1_pos, player1_health, player1_alive, player1_rotation
+    global player2_pos, player2_health, player2_alive, player2_rotation
     
     if player_num == 1:
         player1_pos = [-SPAWN_DISTANCE, 0, 0]
@@ -389,145 +476,133 @@ def respawn_player(player_num):
         player2_alive = True
 
 def draw_split_screen_hud():
-    """Draw HUD with scoreboard"""
+    """Draw HUD with working scoreboard"""
     glDisable(GL_LIGHTING)
     glDisable(GL_DEPTH_TEST)
+    
+    # Switch to 2D orthographic projection
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
-    glOrtho(0, 1280, 0, 720, -1, 1)
+    glOrtho(0, 1920, 0, 1080, -1, 1)
     glMatrixMode(GL_MODELVIEW)
     glPushMatrix()
     glLoadIdentity()
     
-    # SCOREBOARD (Left side)
-    # Background
+    # SCOREBOARD Background
     glColor3f(0.1, 0.1, 0.1)
     glBegin(GL_QUADS)
-    glVertex2f(10, 720 - 150)
-    glVertex2f(160, 720 - 150)
-    glVertex2f(160, 720 - 10)
-    glVertex2f(10, 720 - 10)
+    glVertex2f(10, 1080 - 220)
+    glVertex2f(250, 1080 - 220)
+    glVertex2f(250, 1080 - 10)
+    glVertex2f(10, 1080 - 10)
     glEnd()
     
     # Border
     glColor3f(1, 1, 1)
     glLineWidth(3)
     glBegin(GL_LINE_LOOP)
-    glVertex2f(10, 720 - 150)
-    glVertex2f(160, 720 - 150)
-    glVertex2f(160, 720 - 10)
-    glVertex2f(10, 720 - 10)
+    glVertex2f(10, 1080 - 220)
+    glVertex2f(250, 1080 - 220)
+    glVertex2f(250, 1080 - 10)
+    glVertex2f(10, 1080 - 10)
     glEnd()
     
-    # Player 1 score indicator
+    # Player 1 color indicator
     glColor3f(0.3, 0.5, 0.9)
     glBegin(GL_QUADS)
-    glVertex2f(20, 720 - 40)
-    glVertex2f(40, 720 - 40)
-    glVertex2f(40, 720 - 20)
-    glVertex2f(20, 720 - 20)
+    glVertex2f(20, 1080 - 50)
+    glVertex2f(60, 1080 - 50)
+    glVertex2f(60, 1080 - 20)
+    glVertex2f(20, 1080 - 20)
     glEnd()
     
-    # Player 1 score bars
-    for i in range(player1_score):
-        glColor3f(0.3, 0.5, 0.9)
-        glBegin(GL_QUADS)
-        y_offset = 60 + i * 15
-        glVertex2f(50, 720 - y_offset)
-        glVertex2f(150, 720 - y_offset)
-        glVertex2f(150, 720 - y_offset + 10)
-        glVertex2f(50, 720 - y_offset + 10)
-        glEnd()
-    
-    # Player 2 score indicator
+    # Player 2 color indicator
     glColor3f(0.9, 0.3, 0.3)
     glBegin(GL_QUADS)
-    glVertex2f(20, 720 - 130)
-    glVertex2f(40, 720 - 130)
-    glVertex2f(40, 720 - 110)
-    glVertex2f(20, 720 - 110)
+    glVertex2f(20, 1080 - 200)
+    glVertex2f(60, 1080 - 200)
+    glVertex2f(60, 1080 - 170)
+    glVertex2f(20, 1080 - 170)
     glEnd()
     
-    # Player 2 score bars
-    for i in range(player2_score):
-        glColor3f(0.9, 0.3, 0.3)
-        glBegin(GL_QUADS)
-        y_offset = 150 + i * 15
-        if y_offset < 250:  # Don't overflow
-            glVertex2f(50, 720 - y_offset)
-            glVertex2f(150, 720 - y_offset)
-            glVertex2f(150, 720 - y_offset + 10)
-            glVertex2f(50, 720 - y_offset + 10)
-            glEnd()
-    
-    # Player 1 health bar (top right)
+    # Health bars (right side)
+    # Player 1
     glColor3f(0.5, 0, 0)
     glBegin(GL_QUADS)
-    glVertex2f(1280 - 210, 720 - 30)
-    glVertex2f(1280 - 10, 720 - 30)
-    glVertex2f(1280 - 10, 720 - 10)
-    glVertex2f(1280 - 210, 720 - 10)
+    glVertex2f(1920 - 310, 1080 - 40)
+    glVertex2f(1920 - 10, 1080 - 40)
+    glVertex2f(1920 - 10, 1080 - 10)
+    glVertex2f(1920 - 310, 1080 - 10)
     glEnd()
     
     glColor3f(0, 1, 0)
-    health_width = (player1_health / 100.0) * 200
+    health_width = (player1_health / 100.0) * 300
     glBegin(GL_QUADS)
-    glVertex2f(1280 - 210, 720 - 30)
-    glVertex2f(1280 - 210 + health_width, 720 - 30)
-    glVertex2f(1280 - 210 + health_width, 720 - 10)
-    glVertex2f(1280 - 210, 720 - 10)
+    glVertex2f(1920 - 310, 1080 - 40)
+    glVertex2f(1920 - 310 + health_width, 1080 - 40)
+    glVertex2f(1920 - 310 + health_width, 1080 - 10)
+    glVertex2f(1920 - 310, 1080 - 10)
     glEnd()
     
-    # Player 2 health bar (bottom right)
+    # Player 2
     glColor3f(0.5, 0, 0)
     glBegin(GL_QUADS)
-    glVertex2f(1280 - 210, 30)
-    glVertex2f(1280 - 10, 30)
-    glVertex2f(1280 - 10, 10)
-    glVertex2f(1280 - 210, 10)
+    glVertex2f(1920 - 310, 40)
+    glVertex2f(1920 - 10, 40)
+    glVertex2f(1920 - 10, 10)
+    glVertex2f(1920 - 310, 10)
     glEnd()
     
     glColor3f(0, 1, 0)
-    health_width = (player2_health / 100.0) * 200
+    health_width = (player2_health / 100.0) * 300
     glBegin(GL_QUADS)
-    glVertex2f(1280 - 210, 30)
-    glVertex2f(1280 - 210 + health_width, 30)
-    glVertex2f(1280 - 210 + health_width, 10)
-    glVertex2f(1280 - 210, 10)
+    glVertex2f(1920 - 310, 40)
+    glVertex2f(1920 - 310 + health_width, 40)
+    glVertex2f(1920 - 310 + health_width, 10)
+    glVertex2f(1920 - 310, 10)
     glEnd()
     
     # Divider line
     glColor3f(1, 1, 1)
-    glLineWidth(2)
+    glLineWidth(3)
     glBegin(GL_LINES)
-    glVertex2f(0, 360)
-    glVertex2f(1280, 360)
+    glVertex2f(0, 540)
+    glVertex2f(1920, 540)
     glEnd()
     
     # Crosshairs
     glLineWidth(3)
-    # Player 1 crosshair
     glColor3f(1, 1, 1)
+    # Player 1
     glBegin(GL_LINES)
-    glVertex2f(640 - 15, 540)
-    glVertex2f(640 + 15, 540)
-    glVertex2f(640, 540 - 15)
-    glVertex2f(640, 540 + 15)
+    glVertex2f(960 - 20, 810)
+    glVertex2f(960 + 20, 810)
+    glVertex2f(960, 810 - 20)
+    glVertex2f(960, 810 + 20)
     glEnd()
     
-    # Player 2 crosshair
+    # Player 2
     glBegin(GL_LINES)
-    glVertex2f(640 - 15, 180)
-    glVertex2f(640 + 15, 180)
-    glVertex2f(640, 180 - 15)
-    glVertex2f(640, 180 + 15)
+    glVertex2f(960 - 20, 270)
+    glVertex2f(960 + 20, 270)
+    glVertex2f(960, 270 - 20)
+    glVertex2f(960, 270 + 20)
     glEnd()
     
+    # Restore matrices
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
+    
+    # Draw score numbers (render after restoring matrices)
+    # Player 1 score
+    draw_text_2d(80, 1080 - 70, player1_score, score_font, (100, 150, 255))
+    
+    # Player 2 score  
+    draw_text_2d(80, 1080 - 220, player2_score, score_font, (255, 100, 100))
+    
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_LIGHTING)
 
@@ -535,9 +610,26 @@ def draw_split_screen_hud():
 glEnable(GL_DEPTH_TEST)
 setup_lighting()
 
-# Create display lists BEFORE main loop (prevents lag)
+# Create display lists
 create_cube_display_list()
 create_ground_display_list()
+
+# Add obstacles
+add_box_obstacle(0, 0, 4)
+add_pillar(-10, -10, 6, 1.5)
+add_pillar(10, 10, 6, 1.5)
+add_pillar(-10, 10, 6, 1.5)
+add_pillar(10, -10, 6, 1.5)
+
+add_wall(-20, -15, -10, -15, 3, 1)
+add_wall(10, 15, 20, 15, 3, 1)
+add_wall(-15, -20, -15, -10, 3, 1)
+add_wall(15, 10, 15, 20, 3, 1)
+
+add_box_obstacle(-15, 0, 3)
+add_box_obstacle(15, 0, 3)
+add_box_obstacle(0, -15, 3)
+add_box_obstacle(0, 15, 3)
 
 # Main loop
 running = True
@@ -551,17 +643,15 @@ while running:
     
     walk_animation += 0.1
     
-    # Events
     for event in pygame.event.get():
         if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
             running = False
         if event.type == KEYDOWN:
             if event.key == K_SPACE:
                 shoot_player1()
-            if event.key == K_SEMICOLON:
+            if event.key == K_SEMICOLON:  # Player 2 shoots with semicolon
                 shoot_player2()
     
-    # Input
     keys = pygame.key.get_pressed()
     player1_moving = handle_player1_movement(keys, dt)
     player2_moving = handle_player2_movement(keys, dt)
@@ -571,9 +661,19 @@ while running:
     for bullet in bullets:
         bullet.update()
     
-    # Check bullet collisions with players
+    # Collision detection
     for bullet in bullets[:]:
-        # Check if player 1 is hit by player 2's bullet
+        # Check obstacle hits
+        for obs in obstacles:
+            if bullet.check_hit_obstacle(obs.to_dict()):
+                if bullet in bullets:
+                    bullets.remove(bullet)
+                break
+        
+        if bullet not in bullets:
+            continue
+        
+        # Check player hits
         if bullet.owner == 2 and player1_alive:
             if bullet.check_hit_player(player1_pos):
                 player1_health -= 34
@@ -582,9 +682,8 @@ while running:
                 if player1_health <= 0:
                     player1_alive = False
                     player2_score += 1
-                    respawn_delay = 180  # 3 seconds at 60fps
+                    respawn_delay = 180
                     
-        # Check if player 2 is hit by player 1's bullet
         if bullet.owner == 1 and player2_alive:
             if bullet.check_hit_player(player2_pos):
                 player2_health -= 34
@@ -608,27 +707,27 @@ while running:
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     
     # PLAYER 1 VIEW (Top Half)
-    glViewport(0, 360, 1280, 360)
+    glViewport(0, 540, 1920, 540)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
-    gluPerspective(45, (1280/360), 0.1, 150.0)
+    gluPerspective(30, (1920/540), 0.1, 150.0)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
     set_camera(player1_pos, player1_rotation)
     draw_scene(player1_moving, player2_moving)
     
     # PLAYER 2 VIEW (Bottom Half)
-    glViewport(0, 0, 1280, 360)
+    glViewport(0, 0, 1920, 540)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
-    gluPerspective(45, (1280/360), 0.1, 150.0)
+    gluPerspective(30, (1920/540), 0.1, 150.0)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
     set_camera(player2_pos, player2_rotation)
     draw_scene(player1_moving, player2_moving)
     
-    # Draw HUD
-    glViewport(0, 0, 1280, 720)
+    # Draw HUD (full screen)
+    glViewport(0, 0, 1920, 1080)
     draw_split_screen_hud()
     
     pygame.display.flip()
