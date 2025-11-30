@@ -7,6 +7,7 @@ import math
 # Initialize Pygame
 pygame.display.init()
 pygame.font.init()
+pygame.joystick.init()
 screen = pygame.display.set_mode((1920, 1080), DOUBLEBUF | OPENGL)
 pygame.display.set_caption("Minecraft PvP Split Screen - 1080p")
 clock = pygame.time.Clock()
@@ -54,6 +55,29 @@ walk_animation = 0
 ground_display_list = None
 cube_display_list = None
 
+# Controllers
+controllers = []
+controller1_last_shoot = False
+controller2_last_shoot = False
+
+def init_controllers():
+    """Initialize all connected controllers"""
+    global controllers
+    controllers.clear()
+    
+    count = pygame.joystick.get_count()
+    print(f"\n=== Controllers detected: {count} ===")
+    
+    for i in range(count):
+        controller = pygame.joystick.Joystick(i)
+        controller.init()
+        controllers.append(controller)
+        print(f"Controller {i}: {controller.get_name()}")
+        print(f"  Axes: {controller.get_numaxes()}")
+        print(f"  Buttons: {controller.get_numbuttons()}")
+    
+    return count
+
 class Bullet:
     def __init__(self, pos, rotation, owner):
         self.pos = list(pos)
@@ -79,7 +103,6 @@ class Bullet:
         return distance < (self.radius + player_size)
     
     def check_hit_obstacle(self, obstacle):
-        """Check if bullet hits an obstacle"""
         dx = self.pos[0] - obstacle['x']
         dy = self.pos[1] - obstacle['y']
         dz = self.pos[2] - obstacle['z']
@@ -110,11 +133,9 @@ class Obstacle:
         }
 
 def add_obstacle(x, y, z, width, height, depth, color):
-    """Add an obstacle to the map"""
     obstacles.append(Obstacle(x, y, z, width, height, depth, color))
 
 def add_wall(x1, z1, x2, z2, height=3, thickness=1):
-    """Add a wall between two points"""
     center_x = (x1 + x2) / 2
     center_z = (z1 + z2) / 2
     length = math.sqrt((x2-x1)**2 + (z2-z1)**2)
@@ -125,11 +146,9 @@ def add_wall(x1, z1, x2, z2, height=3, thickness=1):
         add_obstacle(center_x, height/2, center_z, thickness, height, length, (0.5, 0.3, 0.2))
 
 def add_box_obstacle(x, z, size=3):
-    """Add a box obstacle"""
     add_obstacle(x, size/2, z, size, size, size, (0.6, 0.4, 0.2))
 
 def add_pillar(x, z, height=5, radius=1.5):
-    """Add a pillar"""
     add_obstacle(x, height/2, z, radius*2, height, radius*2, (0.4, 0.4, 0.4))
 
 def setup_lighting():
@@ -313,7 +332,6 @@ def draw_ground():
     glCallList(ground_display_list)
 
 def draw_obstacles():
-    """Draw all obstacles"""
     for obs in obstacles:
         draw_minecraft_cube(obs.x, obs.y, obs.z, obs.width, obs.height, obs.depth, obs.color)
 
@@ -322,10 +340,8 @@ def draw_bullet(bullet):
     draw_minecraft_cube(bullet.pos[0], bullet.pos[1] + 1, bullet.pos[2], 0.2, 0.2, 0.2, color)
 
 def draw_text_2d(x, y, text, font, color=(255, 255, 255)):
-    """Draw text using pygame font - proper 2D overlay method"""
     text_surface = font.render(str(text), True, color)
     text_data = pygame.image.tostring(text_surface, "RGBA", True)
-    
     glRasterPos2f(x, y)
     glDrawPixels(text_surface.get_width(), text_surface.get_height(), 
                  GL_RGBA, GL_UNSIGNED_BYTE, text_data)
@@ -350,8 +366,100 @@ def draw_scene(player1_moving, player2_moving):
     for bullet in bullets:
         draw_bullet(bullet)
 
+def handle_controller_input():
+    """Handle both controllers"""
+    global player1_pos, player1_rotation, player1_alive
+    global player2_pos, player2_rotation, player2_alive
+    global controller1_last_shoot, controller2_last_shoot
+    
+    p1_moving = False
+    p2_moving = False
+    
+    # Player 1 Controller
+    if len(controllers) >= 1 and player1_alive:
+        c = controllers[0]
+        speed = move_speed * 3
+        
+        left_x = c.get_axis(0)
+        left_y = c.get_axis(1)
+        right_x = c.get_axis(2)
+        
+        if abs(left_x) < 0.15: left_x = 0
+        if abs(left_y) < 0.15: left_y = 0
+        if abs(right_x) < 0.15: right_x = 0
+        
+        player1_rotation -= right_x * 2
+        
+        if abs(left_x) > 0 or abs(left_y) > 0:
+            new_x = player1_pos[0] - math.sin(math.radians(player1_rotation)) * left_y * speed
+            new_z = player1_pos[2] - math.cos(math.radians(player1_rotation)) * left_y * speed
+            new_x += math.sin(math.radians(player1_rotation - 90)) * left_x * speed
+            new_z += math.cos(math.radians(player1_rotation - 90)) * left_x * speed
+            
+            collision = False
+            for obs in obstacles:
+                if abs(new_x - obs.x) < obs.width/2 + 0.5 and abs(new_z - obs.z) < obs.depth/2 + 0.5:
+                    collision = True
+                    break
+            
+            if not collision:
+                player1_pos[0] = max(-MAP_SIZE+1, min(MAP_SIZE-1, new_x))
+                player1_pos[2] = max(-MAP_SIZE+1, min(MAP_SIZE-1, new_z))
+            
+            p1_moving = True
+        
+        shoot = c.get_button(7)
+        if c.get_numaxes() > 5:
+            shoot = shoot or c.get_axis(5) > 0.5
+        
+        if shoot and not controller1_last_shoot:
+            shoot_player1()
+        controller1_last_shoot = shoot
+    
+    # Player 2 Controller
+    if len(controllers) >= 2 and player2_alive:
+        c = controllers[1]
+        speed = move_speed * 6
+        
+        left_x = c.get_axis(0)
+        left_y = c.get_axis(1)
+        right_x = c.get_axis(3)
+        
+        if abs(left_x) < 0.15: left_x = 0
+        if abs(left_y) < 0.15: left_y = 0
+        if abs(right_x) < 0.15: right_x = 0
+        
+        player2_rotation -= right_x * 2
+        
+        if abs(left_x) > 0 or abs(left_y) > 0:
+            new_x = player2_pos[0] - math.sin(math.radians(player2_rotation)) * left_y * speed
+            new_z = player2_pos[2] - math.cos(math.radians(player2_rotation)) * left_y * speed
+            new_x += math.sin(math.radians(player2_rotation - 90)) * left_x * speed
+            new_z += math.cos(math.radians(player2_rotation - 90)) * left_x * speed
+            
+            collision = False
+            for obs in obstacles:
+                if abs(new_x - obs.x) < obs.width/2 + 0.5 and abs(new_z - obs.z) < obs.depth/2 + 0.5:
+                    collision = True
+                    break
+            
+            if not collision:
+                player2_pos[0] = max(-MAP_SIZE+1, min(MAP_SIZE-1, new_x))
+                player2_pos[2] = max(-MAP_SIZE+1, min(MAP_SIZE-1, new_z))
+            
+            p2_moving = True
+        
+        shoot = c.get_button(0)
+        if c.get_numaxes() > 5:
+            shoot = shoot or c.get_axis(5) > 0.5
+        
+        if shoot and not controller2_last_shoot:
+            shoot_player2()
+        controller2_last_shoot = shoot
+    
+    return p1_moving, p2_moving
+
 def handle_player1_movement(keys, dt):
-    """Player 1: WASD (with A/D swapped), Q/E rotate, SPACE shoot"""
     global player1_pos, player1_rotation
     if not player1_alive:
         return False
@@ -359,7 +467,6 @@ def handle_player1_movement(keys, dt):
     speed = move_speed * dt
     is_moving = False
     
-    # Rotation with Q and E
     if keys[K_q]:
         player1_rotation += 2
     if keys[K_e]:
@@ -367,7 +474,6 @@ def handle_player1_movement(keys, dt):
     
     new_x, new_z = player1_pos[0], player1_pos[2]
     
-    # Movement (A and D are SWAPPED)
     if keys[K_w]:
         new_x += math.sin(math.radians(player1_rotation)) * speed
         new_z += math.cos(math.radians(player1_rotation)) * speed
@@ -376,16 +482,15 @@ def handle_player1_movement(keys, dt):
         new_x -= math.sin(math.radians(player1_rotation)) * speed
         new_z -= math.cos(math.radians(player1_rotation)) * speed
         is_moving = True
-    if keys[K_d]:  # D now strafes LEFT
+    if keys[K_d]:
         new_x += math.sin(math.radians(player1_rotation - 90)) * speed
         new_z += math.cos(math.radians(player1_rotation - 90)) * speed
         is_moving = True
-    if keys[K_a]:  # A now strafes RIGHT
+    if keys[K_a]:
         new_x += math.sin(math.radians(player1_rotation + 90)) * speed
         new_z += math.cos(math.radians(player1_rotation + 90)) * speed
         is_moving = True
     
-    # Check collision with obstacles
     collision = False
     for obs in obstacles:
         dx = new_x - obs.x
@@ -401,7 +506,6 @@ def handle_player1_movement(keys, dt):
     return is_moving
 
 def handle_player2_movement(keys, dt):
-    """Player 2: IJKL movement, U/O rotate, SEMICOLON shoot"""
     global player2_pos, player2_rotation
     if not player2_alive:
         return False
@@ -409,7 +513,6 @@ def handle_player2_movement(keys, dt):
     speed = move_speed * dt
     is_moving = False
     
-    # Rotation with U and O
     if keys[K_u]:
         player2_rotation += 2
     if keys[K_o]:
@@ -417,25 +520,23 @@ def handle_player2_movement(keys, dt):
     
     new_x, new_z = player2_pos[0], player2_pos[2]
     
-    # Movement with IJKL
-    if keys[K_i]:  # Forward
+    if keys[K_i]:
         new_x += math.sin(math.radians(player2_rotation)) * speed
         new_z += math.cos(math.radians(player2_rotation)) * speed
         is_moving = True
-    if keys[K_k]:  # Backward
+    if keys[K_k]:
         new_x -= math.sin(math.radians(player2_rotation)) * speed
         new_z -= math.cos(math.radians(player2_rotation)) * speed
         is_moving = True
-    if keys[K_j]:  # Strafe left
+    if keys[K_j]:
         new_x += math.sin(math.radians(player2_rotation - 90)) * speed
         new_z += math.cos(math.radians(player2_rotation - 90)) * speed
         is_moving = True
-    if keys[K_l]:  # Strafe right
+    if keys[K_l]:
         new_x += math.sin(math.radians(player2_rotation + 90)) * speed
         new_z += math.cos(math.radians(player2_rotation + 90)) * speed
         is_moving = True
     
-    # Check collision with obstacles
     collision = False
     for obs in obstacles:
         dx = new_x - obs.x
@@ -476,11 +577,9 @@ def respawn_player(player_num):
         player2_alive = True
 
 def draw_split_screen_hud():
-    """Draw HUD with working scoreboard"""
     glDisable(GL_LIGHTING)
     glDisable(GL_DEPTH_TEST)
     
-    # Switch to 2D orthographic projection
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
@@ -526,7 +625,7 @@ def draw_split_screen_hud():
     glVertex2f(20, 1080 - 170)
     glEnd()
     
-    # Health bars (right side)
+    # Health bars
     # Player 1
     glColor3f(0.5, 0, 0)
     glBegin(GL_QUADS)
@@ -574,7 +673,6 @@ def draw_split_screen_hud():
     # Crosshairs
     glLineWidth(3)
     glColor3f(1, 1, 1)
-    # Player 1
     glBegin(GL_LINES)
     glVertex2f(960 - 20, 810)
     glVertex2f(960 + 20, 810)
@@ -582,7 +680,6 @@ def draw_split_screen_hud():
     glVertex2f(960, 810 + 20)
     glEnd()
     
-    # Player 2
     glBegin(GL_LINES)
     glVertex2f(960 - 20, 270)
     glVertex2f(960 + 20, 270)
@@ -590,17 +687,13 @@ def draw_split_screen_hud():
     glVertex2f(960, 270 + 20)
     glEnd()
     
-    # Restore matrices
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
     
-    # Draw score numbers (render after restoring matrices)
-    # Player 1 score
+    # Draw score numbers
     draw_text_2d(80, 1080 - 70, player1_score, score_font, (100, 150, 255))
-    
-    # Player 2 score  
     draw_text_2d(80, 1080 - 220, player2_score, score_font, (255, 100, 100))
     
     glEnable(GL_DEPTH_TEST)
@@ -631,6 +724,9 @@ add_box_obstacle(15, 0, 3)
 add_box_obstacle(0, -15, 3)
 add_box_obstacle(0, 15, 3)
 
+# Initialize controllers
+init_controllers()
+
 # Main loop
 running = True
 last_time = pygame.time.get_ticks()
@@ -649,12 +745,23 @@ while running:
         if event.type == KEYDOWN:
             if event.key == K_SPACE:
                 shoot_player1()
-            if event.key == K_SEMICOLON:  # Player 2 shoots with semicolon
+            if event.key == K_SEMICOLON:
                 shoot_player2()
     
     keys = pygame.key.get_pressed()
-    player1_moving = handle_player1_movement(keys, dt)
-    player2_moving = handle_player2_movement(keys, dt)
+    
+    # Try controller first, fall back to keyboard
+    controller1_moving, controller2_moving = handle_controller_input()
+    
+    if len(controllers) < 1:
+        player1_moving = handle_player1_movement(keys, dt)
+    else:
+        player1_moving = controller1_moving
+    
+    if len(controllers) < 2:
+        player2_moving = handle_player2_movement(keys, dt)
+    else:
+        player2_moving = controller2_moving
     
     # Update bullets
     bullets = [b for b in bullets if b.is_alive()]
@@ -663,7 +770,6 @@ while running:
     
     # Collision detection
     for bullet in bullets[:]:
-        # Check obstacle hits
         for obs in obstacles:
             if bullet.check_hit_obstacle(obs.to_dict()):
                 if bullet in bullets:
@@ -673,7 +779,6 @@ while running:
         if bullet not in bullets:
             continue
         
-        # Check player hits
         if bullet.owner == 2 and player1_alive:
             if bullet.check_hit_player(player1_pos):
                 player1_health -= 34
@@ -726,7 +831,7 @@ while running:
     set_camera(player2_pos, player2_rotation)
     draw_scene(player1_moving, player2_moving)
     
-    # Draw HUD (full screen)
+    # Draw HUD
     glViewport(0, 0, 1920, 1080)
     draw_split_screen_hud()
     
