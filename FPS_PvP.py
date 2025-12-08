@@ -9,7 +9,7 @@ pygame.display.init()
 pygame.font.init()
 pygame.joystick.init()
 screen = pygame.display.set_mode((1920, 1080), DOUBLEBUF | OPENGL)
-pygame.display.set_caption("Minecraft PvP Split Screen - 1080p")
+pygame.display.set_caption("PvP Split Screen - 1080p")
 clock = pygame.time.Clock()
 pygame.mouse.set_visible(False)
 pygame.event.set_grab(True)
@@ -35,6 +35,10 @@ player2_health = 100
 player2_score = 0
 player2_alive = True
 
+# Portal cooldowns
+portal_cooldown1 = 0
+portal_cooldown2 = 0
+
 # Camera settings
 camera_distance = 10
 camera_height = 3
@@ -48,8 +52,12 @@ bullets = []
 # Obstacles list
 obstacles = []
 
+# Portals list - each portal has position and destination
+portals = []
+
 # Animation
 walk_animation = 0
+portal_animation = 0
 
 # Display lists
 ground_display_list = None
@@ -60,8 +68,30 @@ controllers = []
 controller1_last_shoot = False
 controller2_last_shoot = False
 
+class Portal:
+    def __init__(self, x, z, dest_x, dest_z, color=(0.5, 0, 1)):
+        self.x = x
+        self.y = 2.5
+        self.z = z
+        self.dest_x = dest_x
+        self.dest_z = dest_z
+        self.color = color
+        self.radius = 1.5
+        self.height = 5
+    
+    def check_teleport(self, player_pos):
+        """Check if player is in portal"""
+        dx = player_pos[0] - self.x
+        dz = player_pos[2] - self.z
+        distance = math.sqrt(dx*dx + dz*dz)
+        return distance < self.radius
+
+def add_portal_pair(x1, z1, x2, z2):
+    """Add two linked portals (bidirectional teleport)"""
+    portals.append(Portal(x1, z1, x2, z2, (0.5, 0, 1)))
+    portals.append(Portal(x2, z2, x1, z1, (1, 0.5, 0)))
+
 def init_controllers():
-    """Initialize all connected controllers"""
     global controllers
     controllers.clear()
     
@@ -199,6 +229,104 @@ def draw_minecraft_cube(x, y, z, width, height, depth, color):
     glCallList(cube_display_list)
     glPopMatrix()
 
+def draw_portal(portal):
+    """Draw a spinning sphere portal"""
+    glPushMatrix()
+    glTranslatef(portal.x, portal.y, portal.z)
+    
+    # Spinning animation
+    glRotatef(portal_animation * 2, 0, 1, 0)
+    glRotatef(portal_animation, 1, 0, 0)
+    
+    # Draw sphere with lighting
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    
+    # Outer glow sphere (transparent)
+    pulse = 0.5 + 0.3 * math.sin(portal_animation * 0.1)
+    glColor4f(portal.color[0], portal.color[1], portal.color[2], 0.3 * pulse)
+    
+    radius = portal.radius
+    slices = 20
+    stacks = 20
+    
+    # Draw outer transparent sphere
+    for i in range(stacks):
+        lat0 = math.pi * (-0.5 + float(i) / stacks)
+        z0 = math.sin(lat0)
+        zr0 = math.cos(lat0)
+        
+        lat1 = math.pi * (-0.5 + float(i + 1) / stacks)
+        z1 = math.sin(lat1)
+        zr1 = math.cos(lat1)
+        
+        glBegin(GL_QUAD_STRIP)
+        for j in range(slices + 1):
+            lng = 2 * math.pi * float(j) / slices
+            x = math.cos(lng)
+            y = math.sin(lng)
+            
+            glNormal3f(x * zr0, y * zr0, z0)
+            glVertex3f(x * zr0 * radius * 1.2, y * zr0 * radius * 1.2, z0 * radius * 1.2)
+            
+            glNormal3f(x * zr1, y * zr1, z1)
+            glVertex3f(x * zr1 * radius * 1.2, y * zr1 * radius * 1.2, z1 * radius * 1.2)
+        glEnd()
+    
+    # Inner solid sphere
+    glColor4f(portal.color[0] * 0.8, portal.color[1] * 0.8, portal.color[2] * 0.8, 0.8)
+    
+    for i in range(stacks):
+        lat0 = math.pi * (-0.5 + float(i) / stacks)
+        z0 = math.sin(lat0)
+        zr0 = math.cos(lat0)
+        
+        lat1 = math.pi * (-0.5 + float(i + 1) / stacks)
+        z1 = math.sin(lat1)
+        zr1 = math.cos(lat1)
+        
+        glBegin(GL_QUAD_STRIP)
+        for j in range(slices + 1):
+            lng = 2 * math.pi * float(j) / slices
+            x = math.cos(lng)
+            y = math.sin(lng)
+            
+            glNormal3f(x * zr0, y * zr0, z0)
+            glVertex3f(x * zr0 * radius, y * zr0 * radius, z0 * radius)
+            
+            glNormal3f(x * zr1, y * zr1, z1)
+            glVertex3f(x * zr1 * radius, y * zr1 * radius, z1 * radius)
+        glEnd()
+    
+    # Bright core
+    glDisable(GL_LIGHTING)
+    glColor4f(1, 1, 1, 0.9)
+    core_radius = radius * 0.3
+    
+    for i in range(stacks // 2):
+        lat0 = math.pi * (-0.5 + float(i) / stacks)
+        z0 = math.sin(lat0)
+        zr0 = math.cos(lat0)
+        
+        lat1 = math.pi * (-0.5 + float(i + 1) / stacks)
+        z1 = math.sin(lat1)
+        zr1 = math.cos(lat1)
+        
+        glBegin(GL_QUAD_STRIP)
+        for j in range(slices + 1):
+            lng = 2 * math.pi * float(j) / slices
+            x = math.cos(lng)
+            y = math.sin(lng)
+            
+            glVertex3f(x * zr0 * core_radius, y * zr0 * core_radius, z0 * core_radius)
+            glVertex3f(x * zr1 * core_radius, y * zr1 * core_radius, z1 * core_radius)
+        glEnd()
+    
+    glEnable(GL_LIGHTING)
+    glDisable(GL_BLEND)
+    
+    glPopMatrix()
+
 def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
     if not is_alive:
         return
@@ -210,20 +338,16 @@ def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
     arm_swing = math.sin(walk_animation) * 30 if is_moving else 0
     leg_swing = math.sin(walk_animation) * 30 if is_moving else 0
     
-    # HEAD
     head_color = (color[0] * 0.8, color[1] * 0.8, color[2] * 0.8)
     draw_minecraft_cube(0, 1.9, 0, 0.5, 0.5, 0.5, head_color)
     
-    # Eyes
     glDisable(GL_LIGHTING)
     draw_minecraft_cube(-0.12, 1.95, -0.26, 0.08, 0.08, 0.02, (0, 0, 0))
     draw_minecraft_cube(0.12, 1.95, -0.26, 0.08, 0.08, 0.02, (0, 0, 0))
     glEnable(GL_LIGHTING)
     
-    # BODY
     draw_minecraft_cube(0, 1.25, 0, 0.5, 0.75, 0.25, color)
     
-    # RIGHT ARM
     glPushMatrix()
     glTranslatef(-0.375, 1.5, 0)
     glRotatef(arm_swing, 1, 0, 0)
@@ -231,7 +355,6 @@ def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
     draw_minecraft_cube(0, -0.125, 0, 0.25, 0.75, 0.25, color)
     glPopMatrix()
     
-    # LEFT ARM
     glPushMatrix()
     glTranslatef(0.375, 1.5, 0)
     glRotatef(-arm_swing, 1, 0, 0)
@@ -239,7 +362,6 @@ def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
     draw_minecraft_cube(0, -0.125, 0, 0.25, 0.75, 0.25, color)
     glPopMatrix()
     
-    # RIGHT LEG
     glPushMatrix()
     glTranslatef(-0.125, 0.875, 0)
     glRotatef(-leg_swing, 1, 0, 0)
@@ -248,7 +370,6 @@ def draw_minecraft_player(pos, rotation, color, is_moving=False, is_alive=True):
     draw_minecraft_cube(0, 0, 0, 0.25, 0.75, 0.25, leg_color)
     glPopMatrix()
     
-    # LEFT LEG
     glPushMatrix()
     glTranslatef(0.125, 0.875, 0)
     glRotatef(leg_swing, 1, 0, 0)
@@ -263,7 +384,6 @@ def create_ground_display_list():
     ground_display_list = glGenLists(1)
     glNewList(ground_display_list, GL_COMPILE)
     
-    # Main ground
     glColor3f(0.4, 0.7, 0.3)
     glBegin(GL_QUADS)
     glNormal3f(0, 1, 0)
@@ -273,11 +393,9 @@ def create_ground_display_list():
     glVertex3f(-MAP_SIZE, 0, MAP_SIZE)
     glEnd()
     
-    # Border walls
     wall_color = (0.5, 0.3, 0.2)
     wall_height = 5
     
-    # North wall
     glColor3f(*wall_color)
     glBegin(GL_QUADS)
     glNormal3f(0, 0, 1)
@@ -287,7 +405,6 @@ def create_ground_display_list():
     glVertex3f(-MAP_SIZE, wall_height, -MAP_SIZE)
     glEnd()
     
-    # South wall
     glBegin(GL_QUADS)
     glNormal3f(0, 0, -1)
     glVertex3f(-MAP_SIZE, 0, MAP_SIZE)
@@ -296,7 +413,6 @@ def create_ground_display_list():
     glVertex3f(-MAP_SIZE, wall_height, MAP_SIZE)
     glEnd()
     
-    # West wall
     glBegin(GL_QUADS)
     glNormal3f(1, 0, 0)
     glVertex3f(-MAP_SIZE, 0, -MAP_SIZE)
@@ -305,7 +421,6 @@ def create_ground_display_list():
     glVertex3f(-MAP_SIZE, wall_height, -MAP_SIZE)
     glEnd()
     
-    # East wall
     glBegin(GL_QUADS)
     glNormal3f(-1, 0, 0)
     glVertex3f(MAP_SIZE, 0, -MAP_SIZE)
@@ -314,7 +429,6 @@ def create_ground_display_list():
     glVertex3f(MAP_SIZE, wall_height, -MAP_SIZE)
     glEnd()
     
-    # Grid lines
     glDisable(GL_LIGHTING)
     glColor3f(0.3, 0.6, 0.2)
     glBegin(GL_LINES)
@@ -346,6 +460,151 @@ def draw_text_2d(x, y, text, font, color=(255, 255, 255)):
     glDrawPixels(text_surface.get_width(), text_surface.get_height(), 
                  GL_RGBA, GL_UNSIGNED_BYTE, text_data)
 
+def draw_minimap(x, y, size, player_pos, player_rotation, other_pos, player_num):
+    """Draw rotating minimap that follows player"""
+    glDisable(GL_LIGHTING)
+    glDisable(GL_DEPTH_TEST)
+    
+    # Background
+    glColor3f(0.1, 0.1, 0.1)
+    glBegin(GL_QUADS)
+    glVertex2f(x, y)
+    glVertex2f(x + size, y)
+    glVertex2f(x + size, y + size)
+    glVertex2f(x, y + size)
+    glEnd()
+    
+    # Border
+    glColor3f(1, 1, 1)
+    glLineWidth(2)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(x, y)
+    glVertex2f(x + size, y)
+    glVertex2f(x + size, y + size)
+    glVertex2f(x, y + size)
+    glEnd()
+    
+    center_x = x + size / 2
+    center_y = y + size / 2
+    scale = size / (MAP_SIZE * 2)
+    
+    rotation = math.radians(player_rotation + 180)
+    
+    def rotate_point(px, pz, angle):
+        """Rotate a point around origin"""
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        return (px * cos_a - pz * sin_a, px * sin_a + pz * cos_a)
+    
+    # Draw map bounds (rotated)
+    glColor3f(0.3, 0.3, 0.3)
+    glBegin(GL_LINE_LOOP)
+    corners = [(-MAP_SIZE, -MAP_SIZE), (MAP_SIZE, -MAP_SIZE), 
+               (MAP_SIZE, MAP_SIZE), (-MAP_SIZE, MAP_SIZE)]
+    for corner_x, corner_z in corners:
+        # Relative to player
+        rel_x = corner_x - player_pos[0]
+        rel_z = corner_z - player_pos[2]
+        # Rotate
+        rot_x, rot_z = rotate_point(rel_x, rel_z, rotation)
+        # Clamp to minimap bounds
+        screen_x = center_x + rot_x * scale
+        screen_y = center_y - rot_z * scale
+        glVertex2f(screen_x, screen_y)
+    glEnd()
+    
+    # Draw obstacles (rotated)
+    glColor3f(0.6, 0.4, 0.2)
+    for obs in obstacles:
+        rel_x = obs.x - player_pos[0]
+        rel_z = obs.z - player_pos[2]
+        
+        # Only draw if in range
+        if abs(rel_x) < MAP_SIZE and abs(rel_z) < MAP_SIZE:
+            rot_x, rot_z = rotate_point(rel_x, rel_z, rotation)
+            
+            ox = center_x + rot_x * scale
+            oz = center_y - rot_z * scale
+            obs_size = obs.width * scale * 0.5
+            
+            # Check if in minimap bounds
+            if (x < ox < x + size) and (y < oz < y + size):
+                glBegin(GL_QUADS)
+                glVertex2f(ox - obs_size, oz - obs_size)
+                glVertex2f(ox + obs_size, oz - obs_size)
+                glVertex2f(ox + obs_size, oz + obs_size)
+                glVertex2f(ox - obs_size, oz + obs_size)
+                glEnd()
+    
+    # Draw portals (rotated)
+    for portal in portals:
+        rel_x = portal.x - player_pos[0]
+        rel_z = portal.z - player_pos[2]
+        
+        if abs(rel_x) < MAP_SIZE and abs(rel_z) < MAP_SIZE:
+            rot_x, rot_z = rotate_point(rel_x, rel_z, rotation)
+            
+            px = center_x + rot_x * scale
+            pz = center_y - rot_z * scale
+            
+            if (x < px < x + size) and (y < pz < y + size):
+                glColor3f(*portal.color)
+                glBegin(GL_TRIANGLE_FAN)
+                glVertex2f(px, pz)
+                for i in range(9):
+                    angle = (i / 8) * 2 * math.pi
+                    glVertex2f(px + math.cos(angle) * 3, pz + math.sin(angle) * 3)
+                glEnd()
+    
+    # Draw other player (rotated)
+    rel_x = other_pos[0] - player_pos[0]
+    rel_z = other_pos[2] - player_pos[2]
+    
+    if abs(rel_x) < MAP_SIZE and abs(rel_z) < MAP_SIZE:
+        rot_x, rot_z = rotate_point(rel_x, rel_z, rotation)
+        
+        ox = center_x + rot_x * scale
+        oz = center_y - rot_z * scale
+        
+        if (x < ox < x + size) and (y < oz < y + size):
+            other_color = (0.9, 0.3, 0.3) if player_num == 1 else (0.3, 0.5, 0.9)
+            glColor3f(*other_color)
+            glBegin(GL_TRIANGLES)
+            glVertex2f(ox, oz - 5)
+            glVertex2f(ox - 4, oz + 4)
+            glVertex2f(ox + 4, oz + 4)
+            glEnd()
+    
+    # Draw current player (center - always visible)
+    player_color = (0.3, 0.5, 0.9) if player_num == 1 else (0.9, 0.3, 0.3)
+    glColor3f(*player_color)
+    glBegin(GL_TRIANGLE_FAN)
+    glVertex2f(center_x, center_y)
+    for i in range(9):
+        angle = (i / 8) * 2 * math.pi
+        glVertex2f(center_x + math.cos(angle) * 4, center_y + math.sin(angle) * 4)
+    glEnd()
+    
+    # Direction arrow (always points up on minimap)
+    arrow_len = 8
+    glColor3f(1, 1, 1)
+    glLineWidth(2)
+    glBegin(GL_LINES)
+    glVertex2f(center_x, center_y)
+    glVertex2f(center_x, center_y + arrow_len)
+    glEnd()
+    
+    # Arrow head
+    glBegin(GL_TRIANGLES)
+    glVertex2f(center_x, center_y + arrow_len)
+    glVertex2f(center_x - 3, center_y + arrow_len - 5)
+    glVertex2f(center_x + 3, center_y + arrow_len - 5)
+    glEnd()
+    
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_LIGHTING)
+
+
 def set_camera(player_pos, player_rotation):
     cam_x = player_pos[0] - math.sin(math.radians(player_rotation)) * camera_distance
     cam_y = player_pos[1] + camera_height
@@ -360,6 +619,10 @@ def set_camera(player_pos, player_rotation):
 def draw_scene(player1_moving, player2_moving):
     draw_ground()
     draw_obstacles()
+    
+    for portal in portals:
+        draw_portal(portal)
+    
     draw_minecraft_player(player1_pos, player1_rotation, (0.3, 0.5, 0.9), player1_moving, player1_alive)
     draw_minecraft_player(player2_pos, player2_rotation, (0.9, 0.3, 0.3), player2_moving, player2_alive)
     
@@ -419,11 +682,11 @@ def handle_controller_input():
     # Player 2 Controller
     if len(controllers) >= 2 and player2_alive:
         c = controllers[1]
-        speed = move_speed * 6
+        speed = move_speed * 3
         
         left_x = c.get_axis(0)
         left_y = c.get_axis(1)
-        right_x = c.get_axis(3)
+        right_x = c.get_axis(2)
         
         if abs(left_x) < 0.15: left_x = 0
         if abs(left_y) < 0.15: left_y = 0
@@ -588,7 +851,7 @@ def draw_split_screen_hud():
     glPushMatrix()
     glLoadIdentity()
     
-    # SCOREBOARD Background
+    # SCOREBOARD
     glColor3f(0.1, 0.1, 0.1)
     glBegin(GL_QUADS)
     glVertex2f(10, 1080 - 220)
@@ -597,7 +860,6 @@ def draw_split_screen_hud():
     glVertex2f(10, 1080 - 10)
     glEnd()
     
-    # Border
     glColor3f(1, 1, 1)
     glLineWidth(3)
     glBegin(GL_LINE_LOOP)
@@ -607,7 +869,6 @@ def draw_split_screen_hud():
     glVertex2f(10, 1080 - 10)
     glEnd()
     
-    # Player 1 color indicator
     glColor3f(0.3, 0.5, 0.9)
     glBegin(GL_QUADS)
     glVertex2f(20, 1080 - 50)
@@ -616,7 +877,6 @@ def draw_split_screen_hud():
     glVertex2f(20, 1080 - 20)
     glEnd()
     
-    # Player 2 color indicator
     glColor3f(0.9, 0.3, 0.3)
     glBegin(GL_QUADS)
     glVertex2f(20, 1080 - 200)
@@ -626,7 +886,6 @@ def draw_split_screen_hud():
     glEnd()
     
     # Health bars
-    # Player 1
     glColor3f(0.5, 0, 0)
     glBegin(GL_QUADS)
     glVertex2f(1920 - 310, 1080 - 40)
@@ -644,7 +903,6 @@ def draw_split_screen_hud():
     glVertex2f(1920 - 310, 1080 - 10)
     glEnd()
     
-    # Player 2
     glColor3f(0.5, 0, 0)
     glBegin(GL_QUADS)
     glVertex2f(1920 - 310, 40)
@@ -662,7 +920,7 @@ def draw_split_screen_hud():
     glVertex2f(1920 - 310, 10)
     glEnd()
     
-    # Divider line
+    # Divider
     glColor3f(1, 1, 1)
     glLineWidth(3)
     glBegin(GL_LINES)
@@ -687,23 +945,26 @@ def draw_split_screen_hud():
     glVertex2f(960, 270 + 20)
     glEnd()
     
+    # Minimaps
+    draw_minimap(1920 - 210, 1080 - 260, 200, player1_pos, player1_rotation, player2_pos, 1)
+    draw_minimap(1920 - 210, 50, 200, player2_pos, player2_rotation, player1_pos, 2)
+    
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
     
-    # Draw score numbers
     draw_text_2d(80, 1080 - 70, player1_score, score_font, (100, 150, 255))
     draw_text_2d(80, 1080 - 220, player2_score, score_font, (255, 100, 100))
     
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_LIGHTING)
 
-# Initialize OpenGL
+# Initialize
 glEnable(GL_DEPTH_TEST)
+glEnable(GL_BLEND)
 setup_lighting()
 
-# Create display lists
 create_cube_display_list()
 create_ground_display_list()
 
@@ -724,7 +985,9 @@ add_box_obstacle(15, 0, 3)
 add_box_obstacle(0, -15, 3)
 add_box_obstacle(0, 15, 3)
 
-# Initialize controllers
+add_portal_pair(-40, 0, 40, 0)
+add_portal_pair(40, 0, -40, 0)   
+
 init_controllers()
 
 # Main loop
@@ -738,6 +1001,7 @@ while running:
     last_time = current_time
     
     walk_animation += 0.1
+    portal_animation += 1
     
     for event in pygame.event.get():
         if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
@@ -750,7 +1014,6 @@ while running:
     
     keys = pygame.key.get_pressed()
     
-    # Try controller first, fall back to keyboard
     controller1_moving, controller2_moving = handle_controller_input()
     
     if len(controllers) < 1:
@@ -762,6 +1025,23 @@ while running:
         player2_moving = handle_player2_movement(keys, dt)
     else:
         player2_moving = controller2_moving
+    
+    # Check portal teleportation with cooldown
+    if portal_cooldown1 > 0:
+        portal_cooldown1 -= 1
+    if portal_cooldown2 > 0:
+        portal_cooldown2 -= 1
+
+    for portal in portals:
+        if player1_alive and portal.check_teleport(player1_pos) and portal_cooldown1 == 0:
+            player1_pos[0] = portal.dest_x
+            player1_pos[2] = portal.dest_z
+            portal_cooldown1 = 60  # 1 second cooldown at 60fps
+        if player2_alive and portal.check_teleport(player2_pos) and portal_cooldown2 == 0:
+            player2_pos[0] = portal.dest_x
+            player2_pos[2] = portal.dest_z
+            portal_cooldown2 = 60
+
     
     # Update bullets
     bullets = [b for b in bullets if b.is_alive()]
@@ -799,7 +1079,6 @@ while running:
                     player1_score += 1
                     respawn_delay = 180
     
-    # Handle respawn
     if respawn_delay > 0:
         respawn_delay -= 1
         if respawn_delay == 0:
@@ -808,10 +1087,9 @@ while running:
             if not player2_alive:
                 respawn_player(2)
     
-    # Clear screen
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     
-    # PLAYER 1 VIEW (Top Half)
+    # PLAYER 1 VIEW
     glViewport(0, 540, 1920, 540)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
@@ -821,7 +1099,7 @@ while running:
     set_camera(player1_pos, player1_rotation)
     draw_scene(player1_moving, player2_moving)
     
-    # PLAYER 2 VIEW (Bottom Half)
+    # PLAYER 2 VIEW
     glViewport(0, 0, 1920, 540)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
@@ -831,7 +1109,7 @@ while running:
     set_camera(player2_pos, player2_rotation)
     draw_scene(player1_moving, player2_moving)
     
-    # Draw HUD
+    # HUD
     glViewport(0, 0, 1920, 1080)
     draw_split_screen_hud()
     
